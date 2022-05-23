@@ -21,79 +21,167 @@ import com.alipay.sofa.jraft.conf.Configuration;
 import com.alipay.sofa.jraft.entity.PeerId;
 import com.alipay.sofa.jraft.error.RemotingException;
 import counter.rpc.CounterGrpcHelper;
+import counter.rpc.Outter.ValueResponse;
 import counter.rpc.Outter.UpdateRequest;
+import counter.rpc.Outter.GetRequest;
 import com.alipay.sofa.jraft.option.CliOptions;
 import com.alipay.sofa.jraft.rpc.InvokeCallback;
 import com.alipay.sofa.jraft.rpc.impl.cli.CliClientServiceImpl;
 
+import java.util.Scanner;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeoutException;
 
 public class Client {
+    static int operationTimeout = 5000;
+
+    private static final CliClientServiceImpl cliClientService = new CliClientServiceImpl();
+
+    private static PeerId leader;
 
     public static void main(final String[] args) throws Exception {
         if (args.length != 2) {
-            System.out.println("Usage : java com.alipay.sofa.jraft.example.counter.CounterClient {groupId} {conf}");
-            System.out
-                .println("Example: java com.alipay.sofa.jraft.example.counter.CounterClient counter 127.0.0.1:8081,127.0.0.1:8082,127.0.0.1:8083");
+            System.out.println("Usage : provide args {groupId} {conf}");
             System.exit(1);
         }
-        final String groupId = args[0];
-        final String confStr = args[1];
-        CounterGrpcHelper.initGRpc();
+        init(args[0], args[1]);
 
+//        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+//            try {
+//                System.out.println("DLT Node exits.");
+//            } catch (IOException e) { /* failed */ }
+//        }));
+
+        Scanner scanner = new Scanner(System.in);
+
+        while (true) {
+            System.out.print("Input : ");
+            String userInput = scanner.nextLine();
+            System.out.println("Operation : " + userInput);
+
+            final CountDownLatch latch = new CountDownLatch(1);
+
+            String operation = userInput.split(" ")[0];
+
+            switch (operation) {
+                case "get":
+                    get(leader, latch);
+                    break;
+                case "+":
+                    String addValue = userInput.split(" ")[1];
+                    incrementAndGet(leader, latch, Integer.parseInt(addValue));
+                    break;
+                case "-":
+                    String minusValue = userInput.split(" ")[1];
+                    decrementAndGet(leader, latch, -Integer.parseInt(minusValue));
+                    break;
+                case "exit":
+                    System.exit(0);
+                    break;
+            }
+
+            latch.await();
+        }
+    }
+
+    private static void init(final String groupId, final String confStr) throws InterruptedException, TimeoutException {
+        CounterGrpcHelper.initGRpc();
         final Configuration conf = new Configuration();
         if (!conf.parse(confStr)) {
             throw new IllegalArgumentException("Fail to parse conf:" + confStr);
         }
-
         RouteTable.getInstance().updateConfiguration(groupId, conf);
-
-        final CliClientServiceImpl cliClientService = new CliClientServiceImpl();
         cliClientService.init(new CliOptions());
-
         if (!RouteTable.getInstance().refreshLeader(cliClientService, groupId, 1000).isOk()) {
             throw new IllegalStateException("Refresh leader failed");
         }
 
-        final PeerId leader = RouteTable.getInstance().selectLeader(groupId);
-        System.out.println("Leader is " + leader);
-        final int n = 1000;
-        final CountDownLatch latch = new CountDownLatch(n);
-        final long start = System.currentTimeMillis();
-        for (int i = 0; i < n; i++) {
-            incrementAndGet(cliClientService, leader, i, latch);
-        }
-        latch.await();
-        System.out.println(n + " ops, cost : " + (System.currentTimeMillis() - start) + " ms.");
-        System.exit(0);
+        leader = RouteTable.getInstance().selectLeader(groupId);
     }
 
-    private static void incrementAndGet(
-            final CliClientServiceImpl cliClientService,
+    private static void update(
             final PeerId leader,
-            final int change,
-            CountDownLatch latch) throws RemotingException, InterruptedException
+            CountDownLatch latch,
+            final int change) throws RemotingException, InterruptedException
     {
         UpdateRequest request = UpdateRequest.newBuilder().setChange(change).build();
-        cliClientService.getRpcClient().invokeAsync(leader.getEndpoint(), request, new InvokeCallback() {
 
+        InvokeCallback callback = new InvokeCallback() {
             @Override
             public void complete(Object result, Throwable err) {
                 if (err == null) {
-                    latch.countDown();
-                    System.out.println("incrementAndGet result:" + result);
+                    ValueResponse response = (ValueResponse) result;
+                    String status;
+
+                    if (response.getSuccess())
+                        status = "Success";
+                    else
+                        status = "Fail";
+
+                    if (change >= 0)
+                        System.out.println("Increment Counter : " + status);
+                    else
+                        System.out.println("Decrement Counter : " + status);
+
+                    try {
+                        get(leader, latch);
+                    } catch (RemotingException | InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+
                 } else {
                     err.printStackTrace();
-                    latch.countDown();
                 }
             }
 
             @Override
-            public Executor executor() {
-                return null;
-            }
-        }, 5000);
+            public Executor executor() { return null; }
+        };
+
+        Client.cliClientService.getRpcClient().invokeAsync(leader.getEndpoint(), request, callback, operationTimeout);
     }
+
+    private static void get(
+            final PeerId leader,
+            CountDownLatch latch) throws RemotingException, InterruptedException
+    {
+        GetRequest request = GetRequest.newBuilder().build();
+        InvokeCallback callback = new InvokeCallback() {
+            @Override
+            public void complete(Object result, Throwable err) {
+                if (err == null) {
+                    ValueResponse response = (ValueResponse) result;
+                    System.out.println("Get Counter Value : " + response.getValue());
+                } else {
+                    err.printStackTrace();
+                }
+
+                latch.countDown();
+            }
+
+            @Override
+            public Executor executor() { return null; }
+        };
+
+        Client.cliClientService.getRpcClient().invokeAsync(leader.getEndpoint(), request, callback, operationTimeout);
+    }
+
+    private static void incrementAndGet(
+            final PeerId leader,
+            CountDownLatch latch,
+            final int change) throws RemotingException, InterruptedException
+    {
+        update(leader, latch, change);
+    }
+
+    private static void decrementAndGet(
+            final PeerId leader,
+            CountDownLatch latch,
+            final int change) throws RemotingException, InterruptedException
+    {
+        update(leader, latch, change);
+    }
+
 
 }

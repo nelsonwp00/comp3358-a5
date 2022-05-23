@@ -43,13 +43,21 @@ public abstract class Closure implements com.alipay.sofa.jraft.Closure {
     }
 
     protected void failure(final String errorMsg, final String redirect) {
-        final ValueResponse response = ValueResponse.newBuilder().setSuccess(false).setErrorMsg(errorMsg)
-            .setRedirect(redirect).build();
+        final ValueResponse response = ValueResponse.newBuilder()
+                .setSuccess(false)
+                .setErrorMsg(errorMsg)
+                .setRedirect(redirect)
+                .build();
+
         setValueResponse(response);
     }
 
     protected void success(final int value) {
-        final ValueResponse response = ValueResponse.newBuilder().setValue(value).setSuccess(true).build();
+        final ValueResponse response = ValueResponse.newBuilder()
+                .setValue(value)
+                .setSuccess(true)
+                .build();
+
         setValueResponse(response);
     }
 }
