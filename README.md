@@ -1,1 +1,1 @@
-# comp3358-a5
+# COMP3358 Raft Application
