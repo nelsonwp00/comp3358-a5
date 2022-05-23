@@ -1,0 +1,23 @@
+syntax = "proto2";
+
+package jraft;
+
+// Command under Directory finalProject : protoc --java_out=src/main/java src/main/resources/trading.proto
+
+option java_package = "counter.rpc";
+option java_outer_classname = "Outter";
+
+
+message GetRequest {
+}
+
+message UpdateRequest {
+  required int32 change = 1;
+}
+
+message ValueResponse {
+  required bool success = 1;
+  optional int32 value = 2; // return the account balance to the request sender
+  optional string redirect = 3;
+  optional string errorMsg = 4;
+}
